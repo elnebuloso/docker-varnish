@@ -1,5 +1,5 @@
 #
-# Based on: https://github.com/mattiasgeniar/varnish-4.0-configuration-templates/blob/master/default.vcl
+# Based on: https://github.com/mattiasgeniar/varnish-6.0-configuration-templates/blob/master/default.vcl
 #
 
 
@@ -78,8 +78,7 @@ sub vcl_recv {
         req.method != "PATCH" &&
         req.method != "DELETE") {
         /* Non-RFC2616 or CONNECT which is weird. */
-        /*Why send the packet upstream, while the visitor is using a non-valid HTTP method? */
-        return (synth(404, "Non-valid HTTP method!"));
+        return (pipe);
     }
 
     # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
@@ -92,6 +91,15 @@ sub vcl_recv {
         return (pass);
     }
 
+    # Some generic URL manipulation, useful for all templates that follow
+    # First remove the Google Analytics added parameters, useless for our backend
+    if (req.url ~ "(\?|&)(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=") {
+        set req.url = regsuball(req.url, "&(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=([A-z0-9_\-\.%25]+)", "");
+        set req.url = regsuball(req.url, "\?(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=([A-z0-9_\-\.%25]+)", "?");
+        set req.url = regsub(req.url, "\?&", "?");
+        set req.url = regsub(req.url, "\?$", "");
+    }
+
     # Strip hash, server doesn't need it.
     if (req.url ~ "\#") {
         set req.url = regsub(req.url, "\#.*$", "");
@@ -101,6 +109,10 @@ sub vcl_recv {
     if (req.url ~ "\?$") {
         set req.url = regsub(req.url, "\?$", "");
     }
+
+    # Some generic cookie manipulation, useful for all templates that follow
+    # Remove the "has_js" cookie
+    set req.http.Cookie = regsuball(req.http.Cookie, "has_js=[^;]+(; )?", "");
 
     # Remove any Google Analytics based cookies
     set req.http.Cookie = regsuball(req.http.Cookie, "__utm.=[^;]+(; )?", "");
@@ -130,19 +142,26 @@ sub vcl_recv {
     # Large static files are delivered directly to the end-user without
     # waiting for Varnish to fully read the file first.
     # Varnish 4 fully supports Streaming, so set do_stream in vcl_backend_response()
-    if (req.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
-        unset req.http.Cookie;
-        return (hash);
+    if($VCL_SETTING_CACHE_LARGE_STATIC_FILES) {
+        if (req.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
+            unset req.http.Cookie;
+            return (hash);
+        }
     }
 
     # Remove all cookies for static files
     # A valid discussion could be held on this line: do you really need to cache static files that don't cause load? Only if you have memory left.
     # Sure, there's disk I/O, but chances are your OS will already have these files in their buffers (thus memory).
     # Before you blindly enable this, have a read here: https://ma.ttias.be/stop-caching-static-files/
-    if (req.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
-        unset req.http.Cookie;
-        return (hash);
+    if($VCL_SETTING_CACHE_STATIC_FILES) {
+        if (req.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
+            unset req.http.Cookie;
+            return (hash);
+        }
     }
+
+    # Send Surrogate-Capability headers to announce ESI support to backend
+    set req.http.Surrogate-Capability = "key=ESI/1.0";
 
     if (req.http.Authorization) {
         # Not cacheable by default
@@ -162,13 +181,15 @@ sub vcl_recv {
 #
 sub vcl_pipe {
     # Note that only the first request to the backend will have
-    # X-Forwarded-For set.  If you use X-Forwarded-For and want to
+    # X-Forwarded-For set. If you use X-Forwarded-For and want to
     # have it set for all requests, make sure to have:
     # set bereq.http.connection = "close";
-    # here.  It is not set by default as it might break some broken web
+    # here. It is not set by default as it might break some broken web
     # applications, like IIS with NTLM authentication.
 
-    # set bereq.http.Connection = "Close";
+    if($VCL_PIPE_BEREQ_HTTP_CONNECTION_CLOSE_ENABLED) {
+        set bereq.http.Connection = "Close";
+    }
 
     # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
     if (req.http.upgrade) {
@@ -206,6 +227,11 @@ sub vcl_hash {
     if (req.http.Cookie) {
         hash_data(req.http.Cookie);
     }
+
+    # Cache the HTTP vs HTTPs separately
+    if (req.http.X-Forwarded-Proto) {
+        hash_data(req.http.X-Forwarded-Proto);
+    }
 }
 
 
@@ -219,17 +245,21 @@ sub vcl_hit {
     }
 
     # https://www.varnish-cache.org/docs/trunk/users-guide/vcl-grace.html
-    # When several clients are requesting the same page Varnish will send one request to the backend and place the others on hold while fetching one copy from the backend.
-    # In some products this is called request coalescing and Varnish does this automatically.
-    # If you are serving thousands of hits per second the queue of waiting requests can get huge.
-    # There are two potential problems - one is a thundering herd problem - suddenly releasing a thousand threads to serve content might send the load sky high.
-    # Secondly - nobody likes to wait. To deal with this we can instruct Varnish to keep the objects in cache beyond their TTL and to serve the waiting requests somewhat stale content.
+    # When several clients are requesting the same page Varnish will send one request to the backend and place the others
+    # on hold while fetching one copy from the backend. In some products this is called request coalescing and Varnish does
+    # this automatically.
+    # If you are serving thousands of hits per second the queue of waiting requests can get huge. There are two potential
+    # problems - one is a thundering herd problem - suddenly releasing a thousand threads to serve content might send the
+    # load sky high. Secondly - nobody likes to wait. To deal with this we can instruct Varnish to keep the objects in cache
+    # beyond their TTL and to serve the waiting requests somewhat stale content.
 
-    # if (!std.healthy(req.backend_hint) && (obj.ttl + obj.grace > 0s)) {
-    #   return (deliver);
-    # } else {
-    #   return (miss);
-    # }
+    if($VLC_HIT_KEEP_OBJECTS_IN_CACHE_BEYOND_TTL) {
+        if (!std.healthy(req.backend_hint) && (obj.ttl + obj.grace > 0s)) {
+        return (deliver);
+        } else {
+        return (miss);
+        }
+    }
 
     # We have no fresh fish. Lets look at the stale ones.
     if (std.healthy(req.backend_hint)) {
@@ -239,7 +269,7 @@ sub vcl_hit {
             return (deliver);
         } else {
             # No candidate for grace. Fetch a fresh object.
-            return (fetch);
+            return(miss);
         }
     } else {
         # backend is sick - use full grace
@@ -248,12 +278,12 @@ sub vcl_hit {
             return (deliver);
         } else {
             # no graced object.
-            return (fetch);
+            return (miss);
         }
     }
 
     # fetch & deliver once we get the result
-    return (fetch); # Dead code, keep as a safeguard
+    return (miss); # Dead code, keep as a safeguard
 }
 
 
@@ -281,16 +311,20 @@ sub vcl_backend_response {
     # Enable cache for all static files
     # The same argument as the static caches from above: monitor your cache size, if you get data nuked out of it, consider giving up the static file cache.
     # Before you blindly enable this, have a read here: https://ma.ttias.be/stop-caching-static-files/
-    if (bereq.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
-        unset beresp.http.set-cookie;
+    if($VCL_SETTING_CACHE_STATIC_FILES) {
+        if (bereq.url ~ "^[^?]*\.(7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|otf|ogg|ogm|opus|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip)(\?.*)?$") {
+            unset beresp.http.set-cookie;
+        }
     }
 
     # Large static files are delivered directly to the end-user without
     # waiting for Varnish to fully read the file first.
     # Varnish 4 fully supports Streaming, so use streaming here to avoid locking.
-    if (bereq.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
-        unset beresp.http.set-cookie;
-        set beresp.do_stream = true;  # Check memory usage it'll grow in fetch_chunksize blocks (128k by default) if the backend doesn't send a Content-Length header, so only enable it for big objects
+    if($VCL_SETTING_CACHE_LARGE_STATIC_FILES) {
+        if (bereq.url ~ "^[^?]*\.(7z|avi|bz2|flac|flv|gz|mka|mkv|mov|mp3|mp4|mpeg|mpg|ogg|ogm|opus|rar|tar|tgz|tbz|txz|wav|webm|xz|zip)(\?.*)?$") {
+            unset beresp.http.set-cookie;
+            set beresp.do_stream = true;  # Check memory usage it'll grow in fetch_chunksize blocks (128k by default) if the backend doesn't send a Content-Length header, so only enable it for big objects
+        }
     }
 
     # Sometimes, a 301 or 302 redirect formed via Apache's mod_rewrite can mess with the HTTP port that is being passed along.
@@ -299,7 +333,7 @@ sub vcl_backend_response {
     # This may need finetuning on your setup.
     #
     # To prevent accidental replace, we only filter the 301/302 redirects for now.
-        if (beresp.status == 301 || beresp.status == 302) {
+    if (beresp.status == 301 || beresp.status == 302) {
         set beresp.http.Location = regsub(beresp.http.Location, ":[0-9]+", "");
     }
 
@@ -310,14 +344,14 @@ sub vcl_backend_response {
 
     # Set 2min cache if unset for static files
     if (beresp.ttl <= 0s || beresp.http.Set-Cookie || beresp.http.Vary == "*") {
-        set beresp.ttl = 120s; # Important, you shouldn't rely on this, SET YOUR HEADERS in the backend
+        set beresp.ttl = $VCL_BACKEND_RESPONSE_BERESP_TTL_DEFAULT; # Important, you shouldn't rely on this, SET YOUR HEADERS in the backend
         set beresp.uncacheable = true;
         return (deliver);
     }
 
     # Allow stale content, in case the backend goes down.
     # make Varnish keep all objects for 6 hours beyond their TTL
-    set beresp.grace = 6h;
+    set beresp.grace = $VCL_BACKEND_RESPONSE_BERESP_GRACE;
 
     return (deliver);
 }
@@ -344,6 +378,7 @@ sub vcl_deliver {
     unset resp.http.X-Powered-By;
 
     # Remove some headers: Apache version & OS
+    unset resp.http.X-Varnish;
     unset resp.http.Server;
     unset resp.http.Via;
     unset resp.http.Link;
@@ -356,10 +391,10 @@ sub vcl_deliver {
 # Only handle actual PURGE HTTP methods, everything else is discarded
 #
 sub vcl_purge {
-    if (req.method == "PURGE") {
+    if (req.method != "PURGE") {
         # restart request
         set req.http.X-Purge = "Yes";
-        return (restart);
+        return(restart);
     }
 }
 
