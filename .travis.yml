@@ -8,10 +8,10 @@ services:
   - docker
 
 script:
-  - cat /VERSION
-  - export MAJOR=$(cat /VERSION | cut -d. -f1)
-  - export MINOR=$(cat /VERSION | cut -d. -f2)
-  - export PATCH=$(cat /VERSION | cut -d. -f3)
+  - cat ./VERSION
+  - export MAJOR=$(cat ./VERSION | cut -d. -f1)
+  - export MINOR=$(cat ./VERSION | cut -d. -f2)
+  - export PATCH=$(cat ./VERSION | cut -d. -f3)
   - docker build --tag elnebuloso/varnish --pull --rm --no-cache --file Dockerfile .
   - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
   - docker tag elnebuloso/varnish elnebuloso/varnish:${MAJOR}.${MINOR}.${PATCH}
