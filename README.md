@@ -4,7 +4,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/elnebuloso/varnish.svg)](https://hub.docker.com/r/elnebuloso/varnish)
 [![GitHub](https://img.shields.io/github/license/elnebuloso/docker-varnish.svg)](https://github.com/elnebuloso/docker-varnish)
 
-Dockerized Varnish with Prometheus Exporter
+Dockerized Varnish 6 with Prometheus Exporter
 
 ## configuration
 
