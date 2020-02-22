@@ -1,6 +1,8 @@
+<img src="https://raw.githubusercontent.com/elnebuloso/docker-varnish/master/logo.png" width="100%"/>
+
 # docker-varnish
 
-[![Build Status](https://travis-ci.com/elnebuloso/docker-varnish.svg?branch=master)](https://travis-ci.com/elnebuloso/docker-varnish)
+![Release](https://github.com/elnebuloso/docker-varnish/workflows/Release/badge.svg)
 [![Docker Pulls](https://img.shields.io/docker/pulls/elnebuloso/varnish.svg)](https://hub.docker.com/r/elnebuloso/varnish)
 [![GitHub](https://img.shields.io/github/license/elnebuloso/docker-varnish.svg)](https://github.com/elnebuloso/docker-varnish)
 
