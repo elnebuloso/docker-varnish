@@ -8,6 +8,15 @@
 
 Dockerized Varnish 6 with Prometheus Exporter
 
+## github
+
+- https://github.com/elnebuloso/docker-varnish
+
+## docker
+
+- https://hub.docker.com/r/elnebuloso/varnish
+- https://hub.docker.com/r/elnebuloso/varnish/tags?page=1&ordering=last_updated
+
 ## configuration
 
 - You can pass environmental variables to customize configuration
